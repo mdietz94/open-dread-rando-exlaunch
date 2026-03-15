@@ -20,6 +20,14 @@ namespace nn::fs {
         DirectoryEntryType_File,
     };
 
+    /*
+        Open a file.
+        outHandle:   Output for handle representing opened file.
+        path:        File path to open.
+        mode:        Mode to open file. See OpenMode.
+    */
+    Result GetEntryType(DirectoryEntryType* type_, char const* path);
+
     /* Bitfield to define the kinds of entries to open from a directory. */
     enum OpenDirectoryMode : u8 {
         OpenDirectoryMode_Directory = BIT(0),
