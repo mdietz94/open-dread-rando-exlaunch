@@ -36,7 +36,9 @@ void replaceString(const char **str)
     }
 }
 
-/* Allocates a buffer and reads from the specified file. */
+/* Allocates a buffer and reads from the specified file.
+ * If the path is not a valid file entry, immediately returns NULL.
+ * Caller is expected to free any non-NULL return value. */
 void* odr::romfs::OpenAndReadFile(const char *path)
 {
     nn::fs::DirectoryEntryType entryType;
@@ -56,6 +58,8 @@ void* odr::romfs::OpenAndReadFile(const char *path)
     return fileBuf;
 }
 
+/* Parses rom:/replacements.json and populates g_stringList.
+ * If replacements.json does not exist, logs a warning and returns without modifying values. */
 void populateStringReplacementList()
 {
     /* Read contents of replacements.json in romfs. Allocates a heap buffer for the file contents and returns it. */
@@ -109,6 +113,16 @@ void populateStringReplacementList()
     free(fileBuf);
 }
 
+/* Sets the save slot names based on the string in "rom:/RDVHASH". 
+ * The file must contain at most a 253-character string (called "hash"). 
+ * If rom:/RDVHASH is not a valid file, writes a warning to console and returns without modifying strings.
+ * If rom:/RDVHASH has a string that is too long, writes a warning to console and returns without modifying strings.
+ *
+ * The following strings are changed:
+ *
+ *  - "profile0" -> "hash_0"
+ *  - "profile1" -> "hash_1"
+ *  - "profile2" -> "hash_2" */
 void setSeedSaveProfile()
 {
     char *seedHash = (char*)odr::romfs::OpenAndReadFile("rom:/RDVHASH");
@@ -119,22 +133,30 @@ void setSeedSaveProfile()
     }
 
     int len = strlen(seedHash);
+    if (len > 253)
+    {
+        const char* msg = "[LogWarn/0] requested slot name in rom:/RDVHASH must be shorter than 254 characters!";
+        svcOutputDebugString(msg, strlen(msg));
+        return;
+    }
+
     if (len > 0)
     {
         char slotName[256];
         u64 crc;
+        len += 2;
 
-        sprintf(slotName, "%s0", seedHash);
-        crc = crc64(slotName, len+1);
-        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0], slotName, len+1, crc, true);
+        sprintf(slotName, "%s_0", seedHash);
+        crc = crc64(slotName, len);
+        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0], slotName, len, crc, true);
 
-        slotName[len] = '1';
-        crc = crc64(slotName, len+1);
-        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0+1], slotName, len+1, crc, true);
+        slotName[len-1] = '1';
+        crc = crc64(slotName, len);
+        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0+1], slotName, len, crc, true);
 
-        slotName[len] = '2';
-        crc = crc64(slotName, len+1);
-        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0+2], slotName, len+1, crc, true);
+        slotName[len-1] = '2';
+        crc = crc64(slotName, len);
+        create_string_instance(&g_stringBank[odr::romfs::STRINGBANK_PROFILE0+2], slotName, len, crc, true);
     }
     free(seedHash);
     return;
