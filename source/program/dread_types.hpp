@@ -37,6 +37,12 @@ typedef struct {
 	// Audio
 	/** Plays a sound effect with specific flags and a callback function that is invoked when the sound finishes playing. */
 	ptrdiff_t PlaySoundWithCallback;
+
+	/** A large array of common CStrId in alpha order */
+	ptrdiff_t StaticStringBank;
+
+	/** Finds a StringInstance or creates one */
+	ptrdiff_t FindOrCreateStringInstance;
 } functionOffsets;
 
 typedef unsigned long long crc64_t;
