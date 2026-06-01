@@ -125,12 +125,12 @@ void makeSockAddrFromU32(u32 host_nbo, std::uint16_t port, ::sockaddr_in& out) {
 bool oneProbeLiteral(s32 fd, const char* probe_data, std::size_t probe_len,
                      const char* host, std::uint16_t port,
                      std::uint32_t timeout_ms, BridgeTarget& out) {
-    ::in_addr ia{};
+    nn::socket::InAddr ia{};
     if (nn::socket::InetAton(host, &ia) == 0) return false;
     ::sockaddr_in addr{};
     addr.sin_family = static_cast<u8>(kAfInet);
     addr.sin_port = nn::socket::InetHtons(port);
-    addr.sin_addr = ia;
+    addr.sin_addr.s_addr = ia.addr;
 
     const s32 sent = nn::socket::SendTo(
         fd, probe_data, probe_len, 0,
@@ -216,11 +216,11 @@ bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
     }
 
     // ---- Step 2: subnet sweep using BRIDGE_HOST_STRING as the seed ----
-    ::in_addr seed_ia{};
+    nn::socket::InAddr seed_ia{};
     if (nn::socket::InetAton(BRIDGE_HOST_STRING, &seed_ia) == 0) {
         return false;
     }
-    const u32 seed_nbo = seed_ia.s_addr;
+    const u32 seed_nbo = seed_ia.addr;
 
     const s32 fd = openUdpSocket();
     if (fd < 0) return false;
