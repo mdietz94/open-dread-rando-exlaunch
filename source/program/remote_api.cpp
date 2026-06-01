@@ -468,15 +468,19 @@ void RemoteApi::SendInventoryJson(int index, const char* inventory_json) {
     // doesn't expose a "raw" value helper; using LineBuffer directly is
     // the path of least pain.
     dread::ap::json::LineBuffer line;
-    line.append("{\"t\":\"inventory\",\"index\":", 26);
+    // Use std::string_view so the length comes from the literal itself
+    // (previous version hard-coded ``26`` for a 25-char literal and dragged
+    // the C-string's null terminator onto the wire, producing
+    // ``"index":\x000,...``).
+    line.append(std::string_view("{\"t\":\"inventory\",\"index\":"));
     char tmp[24];
     std::snprintf(tmp, sizeof(tmp), "%d", index);
     line.append(tmp, std::strlen(tmp));
-    line.append(",\"inventory\":", 13);
+    line.append(std::string_view(",\"inventory\":"));
     if (inventory_json) {
         line.append(inventory_json, std::strlen(inventory_json));
     } else {
-        line.append("[]", 2);
+        line.append(std::string_view("[]"));
     }
     line.append('}');
     enqueue(make_buffer_from_line(line));
