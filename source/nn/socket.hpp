@@ -2,6 +2,7 @@
 
 #include <nn/nn_common.hpp>
 #include <sys/socket.h>
+#include <poll.h>
 
 namespace nn::socket {
 
@@ -25,4 +26,10 @@ namespace nn::socket {
     s32 Listen(s32 socket, s32 backlog);
     s32 Accept(s32 socket, sockaddr* addrOut, u32* addrLenOut);
     s32 Shutdown(s32 desc, s32 how);
+    s32 Poll(::pollfd* fds, ulong nfds, s32 timeout_ms);
 };
+
+namespace nn::nifm {
+    void Initialize();
+    void SubmitNetworkRequestAndWait();
+}
