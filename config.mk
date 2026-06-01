@@ -18,9 +18,16 @@ PYTHON := python3
 # JSON to use to make .npdm
 NPDM_JSON := qlaunch.json
 
+# Bridge fork: BRIDGE_HOST is the /24 seed the Switch sweeps; MOD_VERSION
+# lands in the HELLO envelope. Both are passed by apworld/dread/_setup/build.py
+# via the environment; safe defaults here keep direct `make` invocations
+# working (degrades to loopback-only discovery + a placeholder version).
+BRIDGE_HOST ?= 127.0.0.1
+MOD_VERSION ?= dread-bridge-dev
+
 # Additional C/C++ flags to use.
-C_FLAGS := 
-CXX_FLAGS := 
+C_FLAGS := -DBRIDGE_HOST_STRING=\"$(BRIDGE_HOST)\" -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
+CXX_FLAGS := -DBRIDGE_HOST_STRING=\"$(BRIDGE_HOST)\" -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
 
 # AsRtld settings
 #------------------------
@@ -38,4 +45,4 @@ FTP_USERNAME := anonymous
 FTP_PASSWORD :=
 
 # Settings for deploying to Ryu. Used by the deploy-ryu.sh script.
-RYU_PATH := /mnt/c/Users/USERNAME/AppData/Roaming/Ryujinx
+RYU_PATH := /c/Users/maxwe/AppData/Roaming/Ryujinx
