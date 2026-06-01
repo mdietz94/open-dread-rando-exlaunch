@@ -112,12 +112,14 @@ PacketBuffer make_buffer_from_line(const dread::ap::json::LineBuffer& line) {
 }
 
 void sendHello(const char* layout_uuid_or_empty) {
+    nn::oe::DisplayVersion dispVer;
+    nn::oe::GetDisplayVersion(&dispVer);
     dread::ap::json::LineBuffer line;
     dread::ap::json::Encoder e{line};
     e.beginObject()
         .key("t").value("hello")
         .key("mod_ver").value(MOD_VERSION_STRING)
-        .key("dread_ver").value(GameVersion)
+        .key("dread_ver").value(dispVer.displayVersion)
         .key("layout_uuid").value(layout_uuid_or_empty)
         .key("device_id").value("")  // PC synthesizes from peer IP if empty
      .endObject();
@@ -131,7 +133,7 @@ bool tcp_connect(const dread::ap::BridgeTarget& target) {
         return false;
     }
 
-    ::in_addr ia{};
+    nn::socket::InAddr ia{};
     if (nn::socket::InetAton(target.host.c_str(), &ia) == 0) {
         nn::socket::Close(g_socket);
         g_socket = -1;
@@ -140,7 +142,7 @@ bool tcp_connect(const dread::ap::BridgeTarget& target) {
     ::sockaddr_in addr{};
     addr.sin_family = static_cast<u8>(kAfInet);
     addr.sin_port = nn::socket::InetHtons(target.port);
-    addr.sin_addr = ia;
+    addr.sin_addr.s_addr = ia.addr;
 
     const u32 rc = nn::socket::Connect(
         g_socket, reinterpret_cast<::sockaddr*>(&addr), sizeof(addr));

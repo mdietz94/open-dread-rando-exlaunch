@@ -16,6 +16,8 @@ namespace nn::socket {
     s32 SetSockOpt(s32 socket, s32 socketLevel, s32 option, void const*, u32 len);
     ssize_t Send(s32 socket, void const* buffer, u64 bufferLength, s32 flags);
     ssize_t Recv(s32 desc, void *buffer, size_t bufferLength, s32 flags);
+    ssize_t SendTo(s32 socket, void const* buffer, u64 bufferLength, s32 flags, const sockaddr* addr, u32 addrLen);
+    ssize_t RecvFrom(s32 socket, void* buffer, u64 bufferLength, s32 flags, sockaddr* addr, u32* addrLen);
     s32 Close(s32 desc);
 
     s32 Socket(s32 domain, s32 type, s32 proto);
