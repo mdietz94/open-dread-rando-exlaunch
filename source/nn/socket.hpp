@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nn/nn_common.hpp>
+#include <poll.h>
 #include <sys/socket.h>
 
 namespace nn::socket {
@@ -25,4 +26,14 @@ namespace nn::socket {
     s32 Listen(s32 socket, s32 backlog);
     s32 Accept(s32 socket, sockaddr* addrOut, u32* addrLenOut);
     s32 Shutdown(s32 desc, s32 how);
+
+    // Bridge networking additions — Poll arrived via the original
+    // Ryujinx-fix patch (we kept it for parity); SendTo / RecvFrom /
+    // GetLastErrno are needed by discovery.cpp.
+    s32 Poll(pollfd* fds, ulong nfds, s32 timeoutMs);
+    ssize_t SendTo(s32 socket, const void* buffer, u64 bufferLength,
+                   s32 flags, const sockaddr* addr, u32 addrLen);
+    ssize_t RecvFrom(s32 desc, void* buffer, size_t bufferLength,
+                     s32 flags, sockaddr* addrOut, u32* addrLenOut);
+    s32 GetLastErrno();
 };

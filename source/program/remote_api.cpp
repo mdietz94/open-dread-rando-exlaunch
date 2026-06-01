@@ -112,12 +112,17 @@ PacketBuffer make_buffer_from_line(const dread::ap::json::LineBuffer& line) {
 }
 
 void sendHello(const char* layout_uuid_or_empty) {
+    // dread_ver is intentionally empty in HELLO — the worker thread can't
+    // read Lua (where ``GameVersion`` lives), so we'd need a dedicated
+    // C-side ``nn::oe::GetDisplayVersion`` call. The PC doesn't gate on
+    // dread_ver; leaving it empty is safe. If we want it later, push it
+    // via a follow-up ``layout_uuid``-style message from the bootstrap.
     dread::ap::json::LineBuffer line;
     dread::ap::json::Encoder e{line};
     e.beginObject()
         .key("t").value("hello")
         .key("mod_ver").value(MOD_VERSION_STRING)
-        .key("dread_ver").value(GameVersion)
+        .key("dread_ver").value("")
         .key("layout_uuid").value(layout_uuid_or_empty)
         .key("device_id").value("")  // PC synthesizes from peer IP if empty
      .endObject();
@@ -131,8 +136,11 @@ bool tcp_connect(const dread::ap::BridgeTarget& target) {
         return false;
     }
 
-    ::in_addr ia{};
-    if (nn::socket::InetAton(target.host.c_str(), &ia) == 0) {
+    // SDK's InetAton wants nn::socket::InAddr* (its own private alias);
+    // it's structurally identical to BSD ``in_addr`` (one u32). Use the
+    // SDK type directly so the call links cleanly.
+    nn::socket::InAddr ia_sdk{};
+    if (nn::socket::InetAton(target.host.c_str(), &ia_sdk) == 0) {
         nn::socket::Close(g_socket);
         g_socket = -1;
         return false;
@@ -140,7 +148,7 @@ bool tcp_connect(const dread::ap::BridgeTarget& target) {
     ::sockaddr_in addr{};
     addr.sin_family = static_cast<u8>(kAfInet);
     addr.sin_port = nn::socket::InetHtons(target.port);
-    addr.sin_addr = ia;
+    addr.sin_addr.s_addr = ia_sdk.addr;
 
     const u32 rc = nn::socket::Connect(
         g_socket, reinterpret_cast<::sockaddr*>(&addr), sizeof(addr));
@@ -340,13 +348,11 @@ void worker_main(void*) {
     SocketSpawnThread.SetName("DreadBridgeWorker");
     prepare_thread();
 
-    // Network up — required for nn::socket on a clean boot. nn::nifm is
-    // safe to call from this worker thread; SMO does it from the frame
-    // thread in main.cpp's GameSystem::init hook, but the worker also
-    // works (Dread's game thread doesn't itself use sockets, so there's
-    // no race for the one-shot Initialize).
-    nn::nifm::Initialize();
-    nn::nifm::SubmitNetworkRequestAndWait();
+    // Network init: upstream exlaunch never calls ``nn::nifm`` and ships
+    // on retail HW, so the game's main process must be initializing the
+    // stack before our subsdk runs. Inheriting that is fine; we'd only
+    // need our own nifm call if a future game version stopped doing it
+    // at boot.
 
     std::size_t backoff_idx = 0;
     while (true) {
