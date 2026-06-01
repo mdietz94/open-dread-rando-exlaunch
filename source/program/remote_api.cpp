@@ -317,11 +317,17 @@ void pump_outbound() {
         if (pb->empty()) continue;
         const s32 ret = nn::socket::Send(
             g_socket, pb->data(), pb->size(), MSG_DONTWAIT);
-        if (ret <= 0) continue;
+        // EWOULDBLOCK (send buffer full) or error: stop pumping and retry on
+        // the next poll tick. Sending later buffers now would splice them
+        // ahead of this one and corrupt the byte stream.
+        if (ret <= 0) break;
         if (static_cast<std::size_t>(ret) >= pb->size()) {
             pb->clear();
         } else {
+            // Partial write: keep the unsent tail and stop, so subsequent
+            // buffers aren't spliced ahead of it (preserve FIFO byte order).
             pb->erase(pb->begin(), pb->begin() + ret);
+            break;
         }
     }
     g_sendBuffer.erase(
@@ -464,7 +470,7 @@ void RemoteApi::SendInventoryJson(int index, const char* inventory_json) {
     // doesn't expose a "raw" value helper; using LineBuffer directly is
     // the path of least pain.
     dread::ap::json::LineBuffer line;
-    line.append("{\"t\":\"inventory\",\"index\":", 26);
+    line.append("{\"t\":\"inventory\",\"index\":", 25);
     char tmp[24];
     std::snprintf(tmp, sizeof(tmp), "%d", index);
     line.append(tmp, std::strlen(tmp));
