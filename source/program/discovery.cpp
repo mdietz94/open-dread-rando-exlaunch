@@ -2,15 +2,19 @@
 // smo_archipelago/switch-mod/src/ap/ApDiscovery.cpp to the exlaunch
 // environment.
 //
-// We deliberately do NOT include <sys/socket.h> / <arpa/inet.h> here:
-// the exlaunch SDK's nn::socket declarations use ``nn::socket::InAddr``
-// (its own private alias), and the BSD ``in_addr`` from the system
-// headers triggers a ``cannot convert 'in_addr*' to 'nn::socket::InAddr*'``
-// error on InetAton. SMO sidesteps this by forward-declaring the symbols
-// it needs with the BSD types at file scope; we follow the same pattern
-// for ``SendTo`` / ``RecvFrom`` / ``InetAton`` / ``Poll`` etc.
+// IMPORTANT: this file MUST use the SDK's actual function signatures.
+// C++ name-mangling encodes parameter types into the symbol name; the
+// nnSdk dynamic linker resolves symbols by exact mangled name at first
+// call. Forward-declaring nn::socket::InetAton with ``::in_addr_local*``
+// instead of ``nn::socket::InAddr*`` produces a different mangled name
+// (``_ZN2nn6socket8InetAtonEPKcP13in_addr_local``) which doesn't exist
+// in nnSdk → rtld fails → null PC jump → crash. We rely on the SDK
+// header (nn/socket.hpp, extended by us to declare Poll/SendTo/RecvFrom)
+// so every call site links to the right symbol.
 
 #include <lib.hpp>
+#include <nn.hpp>
+#include <sys/socket.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -27,39 +31,14 @@
 #define BRIDGE_HOST_STRING "127.0.0.1"
 #endif
 
-// File-scope BSD-style socket types, matching nn::socket's underlying ABI.
-// Identical layout to the SMO Switch client (`ApClient.cpp` / `ApDiscovery.cpp`)
-// which is shipping on retail HW.
-struct in_addr_local { u32 s_addr; };
-struct sockaddr_local {
-    u8 sa_len;
-    u8 sa_family;
-    u16 sa_port;
-    in_addr_local sa_addr;
-    u8 sa_zero[8];
-};
-struct pollfd_local { s32 fd; short events; short revents; };
-
-namespace nn::socket {
-    s32 Socket(s32, s32, s32);
-    s32 SendTo(s32, const void*, unsigned long, s32,
-               const ::sockaddr_local*, u32);
-    s32 RecvFrom(s32, void*, unsigned long, s32,
-                 ::sockaddr_local*, u32*);
-    u32 Close(s32);
-    s32 Poll(::pollfd_local*, unsigned long, s32);
-    u16 InetHtons(u16);
-    s32 InetAton(const char*, ::in_addr_local*);
-    s32 GetLastErrno();
-}
-
 namespace dread::ap {
 
 namespace {
 
-constexpr s32 kAfInet      = 2;
-constexpr s32 kSockDgram   = 2;
-constexpr s32 kIpprotoUdp  = 17;
+constexpr s32 kAfInet      = AF_INET;
+constexpr s32 kSockDgram   = SOCK_DGRAM;
+constexpr s32 kIpprotoUdp  = IPPROTO_UDP;
+
 constexpr s16 kPollIn      = 0x0001;
 
 constexpr std::uint32_t kSweepCollectMs   = 2000;
@@ -92,7 +71,7 @@ void closeSocket(s32 fd) {
 }
 
 bool waitReadable(s32 fd, std::uint32_t timeout_ms) {
-    ::pollfd_local pfd{};
+    pollfd pfd{};
     pfd.fd = fd;
     pfd.events = kPollIn;
     pfd.revents = 0;
@@ -145,34 +124,36 @@ bool parseReply(const char* data, std::size_t len, BridgeTarget& out) {
     return true;
 }
 
-void makeSockAddrFromU32(u32 host_nbo, std::uint16_t port, ::sockaddr_local& out) {
+void makeSockAddrFromU32(u32 host_nbo, std::uint16_t port, ::sockaddr_in& out) {
     std::memset(&out, 0, sizeof(out));
-    out.sa_len    = sizeof(out);
-    out.sa_family = static_cast<u8>(kAfInet);
-    out.sa_port   = nn::socket::InetHtons(port);
-    out.sa_addr.s_addr = host_nbo;
+    out.sin_family = static_cast<u8>(kAfInet);
+    out.sin_port   = nn::socket::InetHtons(port);
+    out.sin_addr.s_addr = host_nbo;
 }
 
 bool oneProbeLiteral(s32 fd, const char* probe_data, std::size_t probe_len,
                      const char* host, std::uint16_t port,
                      std::uint32_t timeout_ms, BridgeTarget& out) {
-    ::in_addr_local ia{};
-    if (nn::socket::InetAton(host, &ia) == 0) return false;
-    ::sockaddr_local addr{};
-    addr.sa_len = sizeof(addr);
-    addr.sa_family = static_cast<u8>(kAfInet);
-    addr.sa_port = nn::socket::InetHtons(port);
-    addr.sa_addr = ia;
+    // SDK's InetAton wants nn::socket::InAddr* (its own private alias).
+    // Structurally identical to BSD ``in_addr`` (one u32). Use it directly
+    // so the call links cleanly.
+    nn::socket::InAddr ia_sdk{};
+    if (nn::socket::InetAton(host, &ia_sdk) == 0) return false;
+    ::sockaddr_in addr{};
+    addr.sin_family = static_cast<u8>(kAfInet);
+    addr.sin_port = nn::socket::InetHtons(port);
+    addr.sin_addr.s_addr = ia_sdk.addr;
 
-    const s32 sent = nn::socket::SendTo(
-        fd, probe_data, probe_len, 0, &addr, sizeof(addr));
+    const ssize_t sent = nn::socket::SendTo(
+        fd, probe_data, probe_len, 0,
+        reinterpret_cast<const ::sockaddr*>(&addr), sizeof(addr));
     if (sent < 0) return false;
 
     if (!waitReadable(fd, timeout_ms)) return false;
     char buf[kReplyBufBytes];
-    ::sockaddr_local from{};
+    ::sockaddr from{};
     u32 from_len = sizeof(from);
-    const s32 got = nn::socket::RecvFrom(
+    const ssize_t got = nn::socket::RecvFrom(
         fd, buf, sizeof(buf), 0, &from, &from_len);
     if (got <= 0) return false;
     return parseReply(buf, static_cast<std::size_t>(got), out);
@@ -193,10 +174,11 @@ bool sweepSubnet(s32 fd, const char* probe_data, std::size_t probe_len,
     int sent_count = 0;
     for (u32 ip_ho = net_ho + 1;
          ip_ho < bcast_ho && sent_count < kMaxSweepHosts; ++ip_ho) {
-        ::sockaddr_local addr{};
+        ::sockaddr_in addr{};
         makeSockAddrFromU32(byteswap32(ip_ho), port, addr);
-        const s32 n = nn::socket::SendTo(
-            fd, probe_data, probe_len, 0, &addr, sizeof(addr));
+        const ssize_t n = nn::socket::SendTo(
+            fd, probe_data, probe_len, 0,
+            reinterpret_cast<const ::sockaddr*>(&addr), sizeof(addr));
         if (n >= 0) ++sent_count;
     }
 
@@ -204,9 +186,9 @@ bool sweepSubnet(s32 fd, const char* probe_data, std::size_t probe_len,
     for (int i = 0; i < max_polls; ++i) {
         if (!waitReadable(fd, kInnerPollMs)) continue;
         char buf[kReplyBufBytes];
-        ::sockaddr_local from{};
+        ::sockaddr from{};
         u32 from_len = sizeof(from);
-        const s32 got = nn::socket::RecvFrom(
+        const ssize_t got = nn::socket::RecvFrom(
             fd, buf, sizeof(buf), 0, &from, &from_len);
         if (got <= 0) continue;
         BridgeTarget t;
@@ -243,11 +225,11 @@ bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
     }
 
     // ---- Step 2: subnet sweep using BRIDGE_HOST_STRING as the seed ----
-    ::in_addr_local seed_ia{};
+    nn::socket::InAddr seed_ia{};
     if (nn::socket::InetAton(BRIDGE_HOST_STRING, &seed_ia) == 0) {
         return false;
     }
-    const u32 seed_nbo = seed_ia.s_addr;
+    const u32 seed_nbo = seed_ia.addr;
 
     const s32 fd = openUdpSocket();
     if (fd < 0) return false;
