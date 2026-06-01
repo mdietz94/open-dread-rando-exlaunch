@@ -317,11 +317,17 @@ void pump_outbound() {
         if (pb->empty()) continue;
         const s32 ret = nn::socket::Send(
             g_socket, pb->data(), pb->size(), MSG_DONTWAIT);
-        if (ret <= 0) continue;
+        // EWOULDBLOCK (send buffer full) or error: stop pumping and retry on
+        // the next poll tick. Sending later buffers now would splice them
+        // ahead of this one and corrupt the byte stream.
+        if (ret <= 0) break;
         if (static_cast<std::size_t>(ret) >= pb->size()) {
             pb->clear();
         } else {
+            // Partial write: keep the unsent tail and stop, so subsequent
+            // buffers aren't spliced ahead of it (preserve FIFO byte order).
             pb->erase(pb->begin(), pb->begin() + ret);
+            break;
         }
     }
     g_sendBuffer.erase(
