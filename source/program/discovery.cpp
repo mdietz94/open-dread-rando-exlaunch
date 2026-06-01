@@ -15,6 +15,8 @@
 #include <lib.hpp>
 #include <nn.hpp>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
