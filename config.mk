@@ -18,16 +18,16 @@ PYTHON := python3
 # JSON to use to make .npdm
 NPDM_JSON := qlaunch.json
 
-# Bridge fork: BRIDGE_HOST is the /24 seed the Switch sweeps; MOD_VERSION
-# lands in the HELLO envelope. Both are passed by apworld/dread/_setup/build.py
-# via the environment; safe defaults here keep direct `make` invocations
-# working (degrades to loopback-only discovery + a placeholder version).
-BRIDGE_HOST ?= 127.0.0.1
+# Bridge fork: MOD_VERSION lands in the HELLO envelope; passed by
+# apworld/dread/_setup/build.py via the environment, with a safe default for
+# direct `make` invocations. The Switch's /24 sweep seed is NOT baked — it is
+# read at runtime from rom:/ap_config.json (see source/program/discovery.cpp),
+# so one build targets any LAN.
 MOD_VERSION ?= dread-bridge-dev
 
 # Additional C/C++ flags to use.
-C_FLAGS := -DBRIDGE_HOST_STRING=\"$(BRIDGE_HOST)\" -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
-CXX_FLAGS := -DBRIDGE_HOST_STRING=\"$(BRIDGE_HOST)\" -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
+C_FLAGS := -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
+CXX_FLAGS := -DMOD_VERSION_STRING=\"$(MOD_VERSION)\"
 
 # AsRtld settings
 #------------------------

@@ -5,10 +5,12 @@
 //
 //   1. UDP probe -> 127.0.0.1:17776 — covers Ryujinx running on the same
 //      host as DreadClient. 250 ms timeout.
-//   2. UDP unicast sweep over the BRIDGE_HOST_STRING /24 subnet — every
+//   2. UDP unicast sweep over the /24 subnet whose seed is read at runtime
+//      from rom:/ap_config.json's bridge_host (no compile-time bake) — every
 //      .1..254 host on (seed & 0xFFFFFF00) gets one probe, fired as a tight
 //      burst on a single socket. ~2 s collect window (bumped from SMO's 1 s
-//      for Wi-Fi headroom on real hardware). First valid reply wins.
+//      for Wi-Fi headroom on real hardware). First valid reply wins. Skipped
+//      when the config is absent/invalid (loopback above still works).
 //
 // Replaces the old 255.255.255.255 broadcast (silently dropped on travel
 // routers / mesh repeaters / IGMP-snooping switches). The /24 unicast

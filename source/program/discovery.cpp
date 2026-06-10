@@ -9,17 +9,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "discovery.hpp"
 #include "json_line.hpp"
+#include "romfs.hpp"
+#include "cJSON.h"
 
 #ifndef MOD_VERSION_STRING
 #define MOD_VERSION_STRING "dread-bridge-dev"
-#endif
-
-#ifndef BRIDGE_HOST_STRING
-#define BRIDGE_HOST_STRING "127.0.0.1"
 #endif
 
 namespace dread::ap {
@@ -191,6 +190,40 @@ bool sweepSubnet(s32 fd, const char* probe_data, std::size_t probe_len,
     return false;
 }
 
+// Runtime bridge-host source. rom:/ap_config.json (deployed next to the seed
+// romfs) carries {"bridge_host":"<pc-lan-ip>"} — the SOLE source of the /24
+// sweep seed. There is no compile-time bake: one prebuilt sysmodule reads its
+// target from romfs and works on any LAN.
+//
+// Safe to read here: resolveBridge runs on the worker thread spawned by
+// RemoteApi::Init, which the game's Lua fires well after nn::fs::MountRom,
+// so romfs is already mounted (same window the RDVHASH / replacements.json
+// reads use in romfs.cpp). Absent / unparseable / empty / oversized -> false,
+// and the caller skips the LAN sweep this cycle (loopback still covers
+// Ryujinx-on-same-host).
+bool readConfiguredHost(char* out, std::size_t cap) {
+    char* buf = static_cast<char*>(
+        odr::romfs::OpenAndReadFile("rom:/ap_config.json"));
+    if (buf == nullptr) return false;
+
+    cJSON* json = cJSON_Parse(buf);
+    free(buf);
+    if (json == nullptr) return false;
+
+    bool ok = false;
+    const cJSON* host = cJSON_GetObjectItem(json, "bridge_host");
+    if (cJSON_IsString(host) && host->valuestring != nullptr) {
+        const std::size_t n = std::strlen(host->valuestring);
+        if (n > 0 && n < cap) {
+            std::memcpy(out, host->valuestring, n);
+            out[n] = '\0';
+            ok = true;
+        }
+    }
+    cJSON_Delete(json);
+    return ok;
+}
+
 }  // namespace
 
 bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
@@ -215,9 +248,30 @@ bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
         }
     }
 
-    // ---- Step 2: subnet sweep using BRIDGE_HOST_STRING as the seed ----
+    // ---- Step 2: subnet sweep ----
+    // The /24 sweep seed comes solely from rom:/ap_config.json's bridge_host
+    // (written at deploy time from the PC's live LAN IP). No compile-time
+    // fallback: a missing/unparseable config means no LAN seed, so we skip
+    // the sweep (loopback above still covers Ryujinx-on-same-host) and let
+    // the caller back off and retry once the file is in place.
+    char cfg_host[64];
+    if (!readConfiguredHost(cfg_host, sizeof(cfg_host))) {
+        const char* msg =
+            "[LogWarn/0] rom:/ap_config.json missing/invalid bridge_host; "
+            "no LAN sweep seed this cycle (loopback-only)";
+        svcOutputDebugString(msg, strlen(msg));
+        return false;
+    }
+    {
+        char dbg[128];
+        const int dn = std::snprintf(
+            dbg, sizeof(dbg),
+            "[LogInfo/0] bridge sweep seed=%s (ap_config.json)", cfg_host);
+        if (dn > 0) svcOutputDebugString(dbg, static_cast<std::size_t>(dn));
+    }
+
     nn::socket::InAddr seed_ia{};
-    if (nn::socket::InetAton(BRIDGE_HOST_STRING, &seed_ia) == 0) {
+    if (nn::socket::InetAton(cfg_host, &seed_ia) == 0) {
         return false;
     }
     const u32 seed_nbo = seed_ia.addr;
