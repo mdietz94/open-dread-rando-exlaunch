@@ -62,7 +62,7 @@ namespace exl::hook::nx64 {
         static_assert(sizeof(HookPool) <= HookPoolSize, "");
 
         typedef uint32_t* __restrict* __restrict instruction;
-        typedef struct {
+        struct context {
             struct fix_info {
                 uint32_t* bprx;
                 uint32_t* bprw;
@@ -115,7 +115,7 @@ namespace exl::hook::nx64 {
                     f.bprx = NULL;
                 }
             }
-        } context;
+        };
 
         //-------------------------------------------------------------------------
 
