@@ -424,6 +424,13 @@ void worker_main(void*) {
 // Public API --------------------------------------------------------
 
 void RemoteApi::Init() {
+    // Idempotent: RL.Init() is fired from the game's Lua (system/init.lc),
+    // which the engine may re-run if it ever recreates its Lua state.
+    // Creating/starting SocketSpawnThread a second time would reuse the SAME
+    // static ThreadType + stack while the first worker is still running —
+    // instant corruption. First call wins; later calls are no-ops.
+    static std::atomic<bool> s_initialized{false};
+    if (s_initialized.exchange(true)) return;
     R_ABORT_UNLESS(SocketSpawnThread.Create(worker_main));
     SocketSpawnThread.Start();
 }
