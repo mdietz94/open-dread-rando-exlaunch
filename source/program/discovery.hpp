@@ -46,4 +46,12 @@ bool resolveBridge(
     BridgeTarget& out,
     std::uint16_t discovery_port = kDefaultDiscoveryPort);
 
+// One-shot read of rom:/ap_config.json into an in-memory cache consumed by
+// resolveBridge's /24 sweep. MUST be called on the game thread while romfs
+// is freshly mounted (it is called from romfs.cpp's RomMounted hook). The
+// discovery worker itself performs NO nn::fs calls — an open file accessor
+// on "rom" at the moment the game calls nn::fs::Unmount("rom") (it does at
+// process exit) aborts the game with 2002-6455 FileNotClosed.
+void CacheBridgeHostFromRomfs();
+
 }  // namespace dread::ap

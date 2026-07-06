@@ -6,6 +6,7 @@
 #include <nn.hpp>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -195,36 +196,61 @@ bool sweepSubnet(s32 fd, const char* probe_data, std::size_t probe_len,
 // sweep seed. There is no compile-time bake: one prebuilt sysmodule reads its
 // target from romfs and works on any LAN.
 //
-// Safe to read here: resolveBridge runs on the worker thread spawned by
-// RemoteApi::Init, which the game's Lua fires well after nn::fs::MountRom,
-// so romfs is already mounted (same window the RDVHASH / replacements.json
-// reads use in romfs.cpp). Absent / unparseable / empty / oversized -> false,
-// and the caller skips the LAN sweep this cycle (loopback still covers
-// Ryujinx-on-same-host).
+// fs discipline: the file is read EXACTLY ONCE, on the GAME thread, from the
+// RomMounted hook (romfs.cpp) — the same just-mounted window the RDVHASH /
+// replacements.json reads use. The worker thread consumes only this
+// in-memory cache and NEVER calls nn::fs: Dread manages the "rom" mount
+// itself (it calls nn::fs::Unmount("rom") in its exit path, and nn::fs
+// ABORTS the process — 2002-6455 FileNotClosed — if any accessor is open at
+// that moment). A background thread doing open/read/close against rom: at
+// arbitrary times can therefore kill the game; reading at mount time on the
+// game thread cannot. The config is static per deployed seed (rewritten only
+// between launches), so a one-shot read loses nothing.
+char g_cfgHost[64];
+std::atomic<bool> g_cfgHostValid{false};
+
 bool readConfiguredHost(char* out, std::size_t cap) {
-    char* buf = static_cast<char*>(
-        odr::romfs::OpenAndReadFile("rom:/ap_config.json"));
-    if (buf == nullptr) return false;
-
-    cJSON* json = cJSON_Parse(buf);
-    free(buf);
-    if (json == nullptr) return false;
-
-    bool ok = false;
-    const cJSON* host = cJSON_GetObjectItem(json, "bridge_host");
-    if (cJSON_IsString(host) && host->valuestring != nullptr) {
-        const std::size_t n = std::strlen(host->valuestring);
-        if (n > 0 && n < cap) {
-            std::memcpy(out, host->valuestring, n);
-            out[n] = '\0';
-            ok = true;
-        }
-    }
-    cJSON_Delete(json);
-    return ok;
+    if (!g_cfgHostValid.load(std::memory_order_acquire)) return false;
+    const std::size_t n = std::strlen(g_cfgHost);
+    if (n == 0 || n >= cap) return false;
+    std::memcpy(out, g_cfgHost, n);
+    out[n] = '\0';
+    return true;
 }
 
 }  // namespace
+
+// Called from the RomMounted trampoline (game thread) right after the game
+// mounts romfs. First successful parse wins; later remounts are no-ops so
+// the worker never observes a partially-written buffer.
+void CacheBridgeHostFromRomfs() {
+    if (g_cfgHostValid.load(std::memory_order_relaxed)) return;
+
+    char* buf = static_cast<char*>(
+        odr::romfs::OpenAndReadFile("rom:/ap_config.json"));
+    if (buf == nullptr) {
+        const char* msg =
+            "[LogWarn/0] rom:/ap_config.json missing/unreadable; "
+            "LAN sweep disabled (loopback-only discovery)";
+        svcOutputDebugString(msg, strlen(msg));
+        return;
+    }
+
+    cJSON* json = cJSON_Parse(buf);
+    free(buf);
+    if (json == nullptr) return;
+
+    const cJSON* host = cJSON_GetObjectItem(json, "bridge_host");
+    if (cJSON_IsString(host) && host->valuestring != nullptr) {
+        const std::size_t n = std::strlen(host->valuestring);
+        if (n > 0 && n < sizeof(g_cfgHost)) {
+            std::memcpy(g_cfgHost, host->valuestring, n);
+            g_cfgHost[n] = '\0';
+            g_cfgHostValid.store(true, std::memory_order_release);
+        }
+    }
+    cJSON_Delete(json);
+}
 
 bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
     char probe[kReplyBufBytes];
@@ -250,10 +276,10 @@ bool resolveBridge(BridgeTarget& out, std::uint16_t discovery_port) {
 
     // ---- Step 2: subnet sweep ----
     // The /24 sweep seed comes solely from rom:/ap_config.json's bridge_host
-    // (written at deploy time from the PC's live LAN IP). No compile-time
-    // fallback: a missing/unparseable config means no LAN seed, so we skip
-    // the sweep (loopback above still covers Ryujinx-on-same-host) and let
-    // the caller back off and retry once the file is in place.
+    // (written at deploy time from the PC's live LAN IP), read ONCE at
+    // MountRom time into g_cfgHost — see CacheBridgeHostFromRomfs. No
+    // compile-time fallback: a missing/unparseable config means no LAN seed,
+    // so we skip the sweep (loopback above still covers Ryujinx-on-same-host).
     char cfg_host[64];
     if (!readConfiguredHost(cfg_host, sizeof(cfg_host))) {
         const char* msg =

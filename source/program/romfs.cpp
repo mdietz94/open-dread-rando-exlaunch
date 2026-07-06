@@ -3,6 +3,7 @@
 #include <nn.hpp>
 #include "lib.hpp"
 #include "cJSON.h"
+#include "discovery.hpp"
 
 typedef struct
 {
@@ -38,21 +39,50 @@ void replaceString(const char **str)
 
 /* Allocates a buffer and reads from the specified file.
  * If the path is not a valid file entry, immediately returns NULL.
- * Caller is expected to free any non-NULL return value. */
+ * Caller is expected to free any non-NULL return value.
+ *
+ * IMPORTANT (fs discipline): every nn::fs Result is checked and the file
+ * handle is closed on EVERY path that reaches OpenFile success. Dread
+ * manages the "rom" mount itself and nn::fs::Unmount ABORTS the whole
+ * process (2002-6455, FileNotClosed) if any accessor on the mount is
+ * still open — a single leaked handle here bricks the game at the next
+ * unmount (observed at the game's exit-time Unmount("rom")). The
+ * original upstream version also read `entryType` UNINITIALIZED when
+ * GetEntryType failed, and called GetFileSize/ReadFile/CloseFile on an
+ * UNINITIALIZED handle when OpenFile failed. */
 void* odr::romfs::OpenAndReadFile(const char *path)
 {
-    nn::fs::DirectoryEntryType entryType;
-    nn::fs::GetEntryType(&entryType, path);
+    nn::fs::DirectoryEntryType entryType = (nn::fs::DirectoryEntryType)-1;
+    if (nn::fs::GetEntryType(&entryType, path) != 0) {
+        return NULL;
+    }
     if (entryType != nn::fs::DirectoryEntryType_File) {
         return NULL;
     }
 
-    long int size;
-    nn::fs::FileHandle fileHandle;
-    nn::fs::OpenFile(&fileHandle, path, nn::fs::OpenMode_Read);
-    nn::fs::GetFileSize(&size, fileHandle);
+    nn::fs::FileHandle fileHandle = {};
+    if (nn::fs::OpenFile(&fileHandle, path, nn::fs::OpenMode_Read) != 0) {
+        return NULL;
+    }
+
+    long int size = 0;
+    if (nn::fs::GetFileSize(&size, fileHandle) != 0 || size < 0) {
+        nn::fs::CloseFile(fileHandle);
+        return NULL;
+    }
+
     u8 *fileBuf = (u8 *)malloc(size + 1);
-    nn::fs::ReadFile(fileHandle, 0, fileBuf, size);
+    if (fileBuf == NULL) {
+        nn::fs::CloseFile(fileHandle);
+        return NULL;
+    }
+
+    if (nn::fs::ReadFile(fileHandle, 0, fileBuf, size) != 0) {
+        nn::fs::CloseFile(fileHandle);
+        free(fileBuf);
+        return NULL;
+    }
+
     nn::fs::CloseFile(fileHandle);
     fileBuf[size] = '\0';
     return fileBuf;
@@ -72,8 +102,10 @@ void populateStringReplacementList()
 
     /* Parse json from file buffer. */
     cJSON *json = cJSON_Parse(fileBuf);
-    if(json == NULL)
+    if(json == NULL) {
+        free(fileBuf);
         return;
+    }
 
     /* Get the "replacements" object within the json. */
     const cJSON *replacementList = cJSON_GetObjectItem(json, "replacements");
@@ -186,6 +218,13 @@ HOOK_DEFINE_TRAMPOLINE(RomMounted) {
         Result res = Orig(path, romCache, cacheSize);
         populateStringReplacementList();
         setSeedSaveProfile();
+        /* Read + cache rom:/ap_config.json HERE, on the game thread, in the
+         * same just-mounted window the two reads above use. The discovery
+         * worker consumes only the in-memory cache — it must NEVER touch
+         * nn::fs itself: the game unmounts "rom" on its own schedule (at
+         * least at process exit), and an open accessor from another thread
+         * at that instant aborts the process (2002-6455 FileNotClosed). */
+        dread::ap::CacheBridgeHostFromRomfs();
         return res;
     }
 };
